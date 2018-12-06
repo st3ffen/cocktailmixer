@@ -28,6 +28,7 @@
 #include <BridgeServer.h>
 #include <BridgeClient.h>
 #include "AccelStepper.h" //Stepper
+#include "HX711.h"
 
 // Listen to the default port 5555, the Yún webserver
 // will forward there all the HTTP requests you send
@@ -51,6 +52,7 @@ const int Y_AXE_TIME = 2500;
 
 //other
 AccelStepper stepperX(AccelStepper::DRIVER, 9, 8);
+HX711 scale(A0, A1);
                                   
 void setup() {
   Serial.begin(9600);
@@ -71,6 +73,10 @@ void setup() {
   Serial.println("Start Bridge");
   Bridge.begin();
 
+  //Waage
+  scale.set_scale(-905.286666667); // this value is obtained by calibrating the scale with known weights; see the README for details
+  scale.tare();                    // reset the scale to 0
+  scale.power_down();             // put the ADC in sleep mode
   
   server.listenOnLocalhost();
   server.begin();
@@ -116,7 +122,6 @@ void process(BridgeClient client) {
       if(ingredient.equals("feederd")){
         goToPosition(FEEDER_POSITION_D);
       }
-    
       if(ingredient.equals("up")){
         driveYaxe(Y_AXE_UP);
       }
@@ -288,4 +293,9 @@ void driveYaxe(int zylinder){
   delay(Y_AXE_TIME);
   digitalWrite(zylinder, HIGH);
   delay(500);
+}
+int readscale(){
+  scale.power_up();
+  Serial.println(scale.get_units(10), 1);
+  scale.power_down();             // put the ADC in sleep mode
 }
