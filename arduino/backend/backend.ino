@@ -23,7 +23,8 @@
   http://www.arduino.cc/en/Tutorial/Bridge
 
 */
-
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
 #include <Bridge.h>
 #include <BridgeServer.h>
 #include <BridgeClient.h>
@@ -38,21 +39,25 @@ const int HOME_SWITCH_BEGIN = 12;
 const int HOME_SWITCH_END = 11;
 const int Y_AXE_DOWN = 7;
 const int Y_AXE_UP = 6;
+const int VALVE_A = 5;
+const int VALVE_B = 4;
 //Stepper
 const double STEPPER_INIT_MAX_SPEED = 100.0;
 const double STEPPER_INIT_ACCELERATION = 100.0;
-const double STEPPER_PROD_MAX_SPEED = 1500.0;
-const double STEPPER_PROD_ACCELERATION = 800.0;
+const double STEPPER_PROD_MAX_SPEED = 1400.0;
+const double STEPPER_PROD_ACCELERATION = 1000.0;
 //Mixer
 const int FEEDER_POSITION_A = 6650;
 const int FEEDER_POSITION_B = 11200;
 const int FEEDER_POSITION_C = 15900;
 const int FEEDER_POSITION_D = 21150;
 const int Y_AXE_TIME = 2500;
+const int FEEDER_WAIT_TIME = 4000;
 
 //other
 AccelStepper stepperX(AccelStepper::DRIVER, 9, 8);
 HX711 scale(A0, A1);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
                                   
 void setup() {
   Serial.begin(9600);
@@ -61,23 +66,44 @@ void setup() {
   pinMode(HOME_SWITCH_END, INPUT_PULLUP);
   pinMode(Y_AXE_DOWN, OUTPUT);
   pinMode(Y_AXE_UP, OUTPUT);
-
-  //homeing
-  Serial.println("Start Homing Fuction");
-  homeingStepper();
-  //y axe
+  pinMode(VALVE_A, OUTPUT);
+  pinMode(VALVE_B, OUTPUT);
   digitalWrite(Y_AXE_UP, HIGH);
   digitalWrite(Y_AXE_DOWN, HIGH);
+  digitalWrite(VALVE_A, HIGH);
+  digitalWrite(VALVE_B, HIGH);
+
+  //display
+    // initialize the LCD
+  lcd.begin();
+
+  // Turn on the blacklight and print a message.
+  lcd.backlight();
+  lcd.setCursor(0, 0); // top left
+
+  lcd.print("DringMixer 3000");
+  
+  //homeing
+  lcd.setCursor(0, 1); // bottom left
+  lcd.print("Suche Null Punkt");
+  homeingStepper();
+  //y axe
+
   driveYaxe(Y_AXE_DOWN);
   // Bridge startup
   Serial.println("Start Bridge");
+  lcd.setCursor(0, 1); // bottom left
+  lcd.print("Starte Bridge   ");
   Bridge.begin();
 
   //Waage
+  lcd.setCursor(0, 1); // bottom left
+  lcd.print("Starte Waage    ");
   scale.set_scale(-905.286666667); // this value is obtained by calibrating the scale with known weights; see the README for details
   scale.tare();                    // reset the scale to 0
   scale.power_down();             // put the ADC in sleep mode
-  
+  lcd.setCursor(0, 1); // bottom left
+  lcd.print("bereit          ");
   server.listenOnLocalhost();
   server.begin();
 }
@@ -99,8 +125,9 @@ void loop() {
 }
 
 void process(BridgeClient client) {
+  lcd.setCursor(0, 1); // bottom left
+  lcd.print("Bitte Warten... ");
   while(client.available()){
-    client.println(F("While:"));
     String ingredient = client.readStringUntil('/');
     ingredient.toLowerCase();
     int value = client.readStringUntil('/').toInt();
@@ -112,24 +139,49 @@ void process(BridgeClient client) {
       }
       if(ingredient.equals("feedera")){
         goToPosition(FEEDER_POSITION_A);
+        takeFromFeeder(value);
       }
       if(ingredient.equals("feederb")){
         goToPosition(FEEDER_POSITION_B);
+        takeFromFeeder(value);
       }
       if(ingredient.equals("feederc")){
         goToPosition(FEEDER_POSITION_C);
+        takeFromFeeder(value);
       }
       if(ingredient.equals("feederd")){
         goToPosition(FEEDER_POSITION_D);
+        takeFromFeeder(value);
       }
       if(ingredient.equals("up")){
         driveYaxe(Y_AXE_UP);
       }
-        if(ingredient.equals("down")){
+      if(ingredient.equals("down")){
         driveYaxe(Y_AXE_DOWN);
+      }
+      if(ingredient.equals("scale")){
+        scaleUntil(value);
+      }
+      if(ingredient.equals("valveatest")){
+        digitalWrite(VALVE_A, LOW);
+        delay(2000);
+        digitalWrite(VALVE_A, HIGH);
+      }
+      if(ingredient.equals("valvebtest")){
+        digitalWrite(VALVE_B, LOW);
+        delay(2000);
+        digitalWrite(VALVE_B, HIGH);
+      }
+      if(ingredient.equals("valvea")){
+        valveUntil(value, VALVE_A);
+      }
+      if(ingredient.equals("valveb")){
+        valveUntil(value, VALVE_B);
       }
     }
   }
+  lcd.setCursor(0, 0); // bottom left
+  lcd.print("DringMixer 3000");
   
   // Send feedback to client
   client.print(F("DONE"));
@@ -292,10 +344,46 @@ void driveYaxe(int zylinder){
   digitalWrite(zylinder, LOW);
   delay(Y_AXE_TIME);
   digitalWrite(zylinder, HIGH);
-  delay(500);
+  delay(100);
 }
-int readscale(){
+void takeFromFeeder(int times){
+  for (int i=0; i < times; i++){
+    driveYaxe(Y_AXE_UP);
+    delay(FEEDER_WAIT_TIME);
+    driveYaxe(Y_AXE_DOWN);
+  }
+}
+
+void scaleUntil(int weight){
   scale.power_up();
-  Serial.println(scale.get_units(10), 1);
-  scale.power_down();             // put the ADC in sleep mode
+  Serial.println((int) scale.get_units());
+  Serial.println(weight);
+  while(true){
+    if(((int) scale.get_units(10)) > weight){
+      scale.power_down(); 
+      driveYaxe(Y_AXE_UP);
+      driveYaxe(Y_AXE_DOWN);
+      break;
+    }
+  }
+}
+
+void valveUntil(int weight, int valve){
+  scale.power_up();
+  lcd.setCursor(0, 0); // bottom left
+  lcd.print("Vorher: ");
+  int vorher = (int) scale.get_units();
+  lcd.print(vorher);
+  delay(2000);
+  digitalWrite(valve, LOW);
+  while(true){
+    lcd.setCursor(0, 1);
+    lcd.print("Aktuell: ");
+    lcd.print((int) scale.get_units(5));
+    if(((int) scale.get_units(5)) > (weight + vorher)){
+      scale.power_down(); 
+      digitalWrite(valve, HIGH);
+      break;
+    }
+  }
 }
